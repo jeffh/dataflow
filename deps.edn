@@ -1,0 +1,4 @@
+{:deps    {org.clojure/core.async {:mvn/version "1.3.610"}}
+ :path    ["src" "resources"]
+ :aliases {:dev {:extra-paths ["test"]
+                 :extra-deps  {org.clojure/tools.namespace {:mvn/version "1.1.0"}}}}}
