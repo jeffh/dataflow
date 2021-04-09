@@ -86,6 +86,9 @@
             :or   {type :threads
                    n    1}}
            make-dataflow]
+  (assert (#{:threads :sockets} type))
+  (assert (= type :threads) "Only type=:threads is implemented")
+  (assert (or (= n :cpus) (integer? n)))
   (let [n       (if (= n :cpus)
                   (.availableProcessors (Runtime/getRuntime))
                   n)
@@ -94,9 +97,9 @@
                    (let [w-input (input-ch worker)]
                      (consume (make-dataflow worker w-input))
                      worker)))]
-    {:close (fn closer []
-              (doseq [w workers]
-                (close w)))
+    {:close   (fn closer []
+                (doseq [w workers]
+                  (close w)))
      :workers workers}))
 
 (defn input-variable 
