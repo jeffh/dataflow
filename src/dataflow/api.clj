@@ -1,6 +1,7 @@
 (ns dataflow.api
-  (:require [dataflow.impl.core :as impl]
-            [clojure.core.async :as async]))
+  (:require [dataflow.impl.core :as impl]))
+
+(def input-variable impl/input-variable)
 
 (defn run
   "Starts execution of a dataflow computation graph with a given set of options for a worker.
@@ -70,25 +71,3 @@
 
 (def wait-for async/wait-for)
 (def close! async/close)
-
-#_
-(def graph
-  (-> (->Graph nil [:input] [:output])
-      (add-node (->InputAtom :input input (atom starting-time) :mapper))
-      (add-node (->Map :mapper inc :accum))
-      (add-node (->reduce :reducer + 0 :inspector))
-      (add-node (->Accumulater :accum identity :inspector (atom nil)))
-      (add-node (->Trace :tracer println :output))
-      (add-node (->Inspect :inspector println :output))
-      (add-node (->OutputAtom :output output))))
-
-(def worker (basic-controller graph))
-#_
-(comment
-  (edit/diff [1 2 3] [2 3 4])
-  (start graph worker)
-  (stop graph worker)
-  (do (swap! input inc) @output)
-  (do (swap! (-> graph :nodes :input :ref) inc) @output)
-  (advance-time (-> graph :nodes :a) worker)
-  (reset! input @input))

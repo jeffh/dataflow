@@ -305,8 +305,9 @@
     ((:close workers)))
 
   ;; TODO:
-  ;;   - How do we support the time-lattice with this interface?
   ;;   - Can we make this distributed?
-  ;;   - How do we compute the minimum amout of changes needed to propagate?
-  ;;   - How do we join two dispirate pieces of data?
+  ;;     - How do we support the time-lattice with this interface?
+  ;;     - Is this something the worker implementation that encapsulate?
+  ;;   - Verify: do we compute the minimum amout of changes needed to propagate changes?
+  ;;   - How do we join two despirate streams?
   )
