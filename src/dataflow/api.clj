@@ -30,15 +30,46 @@
    make-dataflow]
   (impl/run opts make-dataflow))
 
-(def pipeline! impl/pipeline!)
-(def pipeline-progress! impl/pipeline-progress!)
-(def segmented-pipeline! impl/segmented-pipeline!)
-(def exchange! impl/exchange!)
-(def probe! impl/probe!)
-(def join! impl/join!)
+(def ^{:doc      "pipeline! processes the input channel using the transducer xf.
+                  Results of xf are produced in the returned channel as values. xf receives the
+                  input value only.
 
-(def put! async/put!)
-(def close! async/close!)
+                  See [[pipeline-progress!]] to access internal time values.
+                  See [[segmented-pipeline!]] to have two-phased processing of input channel"
+       :arglists '([input xf])}
+  pipeline! impl/pipeline!)
+(def ^{:doc      "pipeline-progress! processes the input channel using the
+                  transducer xf. xf is expected to produce [t value] events for the input
+                  channel."
+       :arglists '([input xf])}
+  pipeline-progress! impl/pipeline-progress!)
+(def segmented-pipeline! impl/segmented-pipeline!)
+(def ^{:doc "exchange! repartitions messages in the input channel to allow workers to process messages.
+             Messages with the same key will be processed by the same worker.
+             
+             step-id represents a unique identifier for this step for workers
+             to coordinate this step in the dataflow process.
+
+             key-fn is a custom function that receives the message value to
+             partition. Identical results of these functions will move the
+             message to the same worker. Default is [[identity]]."
+       :arglists '([input worker step-id]
+                   [input worker step-id key-fn])}
+  exchange! impl/exchange!)
+(def ^{:doc "probe! taps the input channel and produces times on the given output-t channel.
+             Returns the a channel with all the same values as the input channel
+             
+             See [[wait-for]]."
+       :arglists '([input output-t])}
+  probe! impl/probe!)
+(def join! impl/join!)
+(def ^{:doc "concat! merges into an input stream"}
+  concat! impl/concat!)
+(def loop-variable impl/loop-variable)
+(def loop-when! impl/loop-when!)
+
+(def wait-for async/wait-for)
+(def close! async/close)
 
 #_
 (def graph

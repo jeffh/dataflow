@@ -1,15 +1,20 @@
 (ns dataflow.impl.core
   (:require [clojure.string :as string]
-            [clojure.core.async :as async]))
+            [clojure.core.async :as async]
+            [clojure.core.async.impl.channels :as channels]
+            [clojure.core.async.impl.protocols :as impl]))
 
 (defprotocol IWorker
   (index [worker] "Returns the worker's index")
   (input-ch [worker])
   (notify-worker [worker partition-key id value t])
   (recv-ch [worker id to])
+  (register-cleanup [worker f])
   (close [worker]))
 
-(defrecord InprocWorker [idx input state]
+(def conj-vec (fnil conj []))
+
+(defrecord InprocWorker [idx input state cleaners]
   IWorker
   (index [_] idx)
   (input-ch [_] input)
@@ -27,7 +32,11 @@
       (async/pipe tmp to)
     ;; (println "recv" (pr-str [idx id]))
       (-> state :pub (async/sub [idx id] tmp))))
+  (register-cleanup [_ f] (swap! cleaners conj-vec f))
   (close [worker]
+    (doseq [f @cleaners]
+      (f))
+      (reset! cleaners [])
     (-> input async/close!)
     (-> state :comm async/close!)
     worker))
@@ -61,7 +70,7 @@
                :pub   (async/pub comm :topic)
                :count n}]
     (mapv
-     #(->InprocWorker % (async/chan) state)
+     #(->InprocWorker % (async/chan) state (atom nil))
      (range n))))
 
 (defn- tap-ch [ch f]
@@ -173,36 +182,33 @@
      (recv-ch worker step-id out)
      out)))
 
-(defn iterate! [input predicate step]
-  (let [iterator (async/chan)
-        out      (async/chan)]
-    (async/go-loop []
-      (if-let [[t msg] (async/<! input)]
-        (do
-          (async/>! iterator [(conj t 0) msg])
-          (recur))
-        (async/close! iterator)))
-    (async/go-loop []
-      (if-let [[t value :as msg] (async/<! iterator)]
-        (if (predicate msg)
-          (async/>! out [(subvec t (dec (count t))) value])
-          (do
-            (async/pipe (step ))
-            (async/>! iterate [(update t (dec (count t)) inc) (step msg)])
-            (recur)))
-        (async/close! out)))
-    out))
+;; Using a custom type to "tag" the channel
+(deftype LoopVariable [ch]
+  channels/MMC
+  (cleanup [_] (channels/cleanup ch))
+  (abort [_] (channels/abort ch))
+  impl/WritePort
+  (put! [_ val handler] (impl/put! ch val handler))
+  impl/ReadPort
+  (take! [_ handler] (impl/take! ch handler))
+  impl/Channel
+  (closed? [_] (impl/closed? ch))
+  (close! [_] (impl/close! ch)))
 
-(defn concat! [input loop-var]
-  (let [input-w-loop-t (async/chan 1 (map (fn [[t v]] [(conj t 0) v])))]
-    (async/pipe input input-w-loop-t)
-    (async/merge [input-w-loop-t loop-var])))
+(defn concat! [input other-input]
+  (if (instance? LoopVariable other-input)
+    (let [input-w-loop-t (async/chan 1 (map (fn [[t v]] [(conj t 0) v])))]
+      (async/pipe input input-w-loop-t)
+      (async/merge [input-w-loop-t other-input]))
+    (async/merge [input other-input])))
 
 (defn loop-variable
-  ([] (loop-variable 1))
-  ([amt]
+  ([worker] (loop-variable worker 1))
+  ([worker amt]
   ;; TODO: we never close loop-variables... what's the best way to do this?
-   (async/chan 1 (map (fn [[t v]] [(update t (dec (count t)) + amt) v])))))
+   (let [v (->LoopVariable (async/chan 1 (map (fn [[t v]] [(update t (dec (count t)) + amt) v]))))]
+     (register-cleanup worker #(async/close! v))
+     v)))
 
 (defn loop-when! [input predicate loop-stream]
   (let [out (async/chan)]
@@ -226,30 +232,44 @@
     out))
 
 (defn wait-for [ch expected-t]
-  (let [p (promise)]
+  (let [p          (promise)
+        expected-t (if (integer? expected-t)
+                     [expected-t]
+                     expected-t)]
     (async/go-loop []
-      (if-let [[t _ :as item] (async/<! ch)]
-        (if (= t expected-t)
-          (deliver p item)
-          (recur))
+      (if-let [msg (async/<! ch)]
+        (let [t (first msg)]
+          (if (not (neg? (compare t expected-t)))
+            (deliver p t)
+            (recur)))
         (deliver p nil)))
     p))
 
-#_(into [] (exchange identity 4) (range 1))
+(defn join! [input]
+  (throw (ex-info "Not implemented")))
+
+(defn print-ch [f]
+  (let [printer (async/chan 64)]
+    (async/go-loop []
+      (when-let [msg (async/<! printer)]
+        (f msg)
+        (recur)))
+    printer))
 
 (comment
 
   (do
     (def sig (async/chan (async/sliding-buffer 1)))
+    (def printer (print-ch prn))
     (def workers
       (run
        {:n :cpus}
        (fn [w input]
          (-> input
-             (pipeline! (trace (using-lock *out* prn)))
+             (pipeline! (trace (partial async/put! printer)))
              (pipeline! (mapcat #(string/split % #" ")))
              #_(exchange! w :words)
-             (pipeline! (trace (using-lock *out* prn)))
+             (pipeline! (trace (partial async/put! printer)))
              (probe! sig)
              #_(pipeline-progress! (trace (using-lock *out* prn)))
              #_(segmented-pipeline! (fn [item] (locking *out* (println "item" item)) item)
@@ -257,18 +277,20 @@
     (def input (input-variable (first (:workers workers)))))
 
 
-  (async/put! input "hello world foo bar quick brown fox jumped over the lazy dog")
   (def p (wait-for sig 1))
-  (deref p 10000 :default)
-  (async/close! input)
-  ((:close workers))
+  (async/put! input "hello world foo bar quick brown fox jumped over the lazy dog")
+  (deref p 1000 :default)
+  (do
+    (async/close! input)
+    (async/close! printer)
+    ((:close workers)))
 
   (do
     (def workers
       (run
        {:n 1}
        (fn [w input]
-         (let [v (loop-variable)]
+         (let [v (loop-variable w)]
            (-> input
                (concat! v)
                (pipeline! (comp (map #(if (even? %) (/ % 2) (+ (* 3 %) 1)))
