@@ -5,7 +5,7 @@
 
 (defn run
   "Starts execution of a dataflow computation graph with a given set of options for a worker.
-   
+
    Parameters:
     - type = :threads | :sockets (defaults to :threads)
       Workers are expected to all run in the same process in different threads. Uses a core.async thread pool.
@@ -29,7 +29,7 @@
   [{:as   opts
     :keys [type n]}
    make-dataflow]
-  (impl/run opts make-dataflow))
+  (impl/run-threads opts make-dataflow))
 
 (def ^{:doc      "pipeline! processes the input channel using the transducer xf.
                   Results of xf are produced in the returned channel as values. xf receives the
@@ -47,7 +47,7 @@
 (def segmented-pipeline! impl/segmented-pipeline!)
 (def ^{:doc "exchange! repartitions messages in the input channel to allow workers to process messages.
              Messages with the same key will be processed by the same worker.
-             
+
              step-id represents a unique identifier for this step for workers
              to coordinate this step in the dataflow process.
 
@@ -59,7 +59,7 @@
   exchange! impl/exchange!)
 (def ^{:doc "probe! taps the input channel and produces times on the given output-t channel.
              Returns the a channel with all the same values as the input channel
-             
+
              See [[wait-for]]."
        :arglists '([input output-t])}
   probe! impl/probe!)
@@ -69,5 +69,4 @@
 (def loop-variable impl/loop-variable)
 (def loop-when! impl/loop-when!)
 
-(def wait-for async/wait-for)
-(def close! async/close)
+(def wait-for impl/wait-for)
