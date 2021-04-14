@@ -1,4 +1,30 @@
 (ns dataflow.impl.core
+  "Core implementation of dataflow.
+
+  This dataflow is represented as a connected set of vertices.
+
+  Each Vertex represents a location where computation occurs.
+  Each Edge represents how data gets transferred between vertices.
+
+  Vertices can be co-located (eg - on the same process/machine).
+
+  For compatibility beyond
+
+  Implementation Notes:
+
+  Within this dataflow implementation there are two types of data transferred
+  through the dataflow graph:
+
+   - inputs with timestamps
+   - advances in time
+
+  A more efficent implementation would drop the latter message and infer it with
+  a time-lattice + scheduler that can determine if all inputs of time t have
+  finished.
+
+  Also, a more efficient scheduler would control which vertices would run, which
+  we're not doing as well.
+  "
   (:require [clojure.string :as string]
             [clojure.core.async :as async]
             [clojure.core.async.impl.channels :as channels]
@@ -112,16 +138,6 @@
     (close* cleaners [input (:comm state)])
     worker))
 
-(defn make-edge
-  ([input xf]
-   (let [w (protocols/get-worker input)
-         e (->Edge (async/chan 1 xf) w)]
-     (async/pipe input e)
-     e))
-  ([worker]
-   (let [w (protocols/get-worker worker)]
-     (->Edge (async/chan) w))))
-
 (defn- inproc-workers [n]
   (let [comm (async/chan 32)
         state {:comm  comm
@@ -158,7 +174,7 @@
                  :topic id
                  :value msg
                  :time  (first msg)}]
-        (messaging/send! agent (str "worker-" i) msg (first (nodes i))))
+        (messaging/send! agent (str "worker-" i) msg (atomix/node-id (nodes i))))
       (let [i   (mod (hash partition-key) (count nodes))
             msg {:from  index
                  :to    i
@@ -166,7 +182,7 @@
                  :value msg
                  :time  (first msg)}]
         #_(locking *out* (println "send" (pr-str msg)))
-        (messaging/send! agent (str "worker-" i) msg (first (nodes i))))))
+        (messaging/send! agent (str "worker-" i) msg (atomix/node-id (nodes i))))))
   (subscribe [_ id to]
     (atomix-subscribe* state index id to))
   (register-cleanup [_ f] (swap! cleaners conj-vec f))
@@ -177,7 +193,7 @@
 
 (defn- atomix-worker [idx nodes cfg]
   (let [nodes (vec nodes)
-        agent (atomix/replica (first (nodes idx)) nodes cfg)
+        agent (atomix/replica (atomix/node-id (nodes idx)) nodes cfg)
         out   (async/chan 32)
         state {:out   out
                :pub   (async/pub out :topic)
@@ -190,6 +206,22 @@
                                                                  notifies)])
                     state
                     (atom []))))
+
+(defn make-edge
+  "Makes an edge (and, optional, a vertex).
+
+  Parameters:
+   - worker: the worker to create an edge that routes data through it.
+   - input: an edge to derive a new edge from
+  "
+  ([input xf]
+   (let [w (protocols/get-worker input)
+         e (->Edge (async/chan 1 xf) w)]
+     (async/pipe input e)
+     e))
+  ([worker]
+   (let [w (protocols/get-worker worker)]
+     (->Edge (async/chan) w))))
 
 (defn- tap-ch [ch f]
   (let [out (make-edge (protocols/get-worker ch))]
@@ -224,6 +256,7 @@
   (let [indexes (if (sequential? index)
                   index
                   [index])
+        nodes   (mapv atomix/->node nodes)
         workers (vec
                  (for [idx index]
                    (let [worker  (atomix-worker idx nodes options)
@@ -235,6 +268,28 @@
                   (protocols/close w)))
      :workers workers}))
 
+(defn vertex*
+  ([input value-handler] (vertex* input nil value-handler (fn [t state] [state])))
+  ([input init-state value-handler] (vertex* input init-state value-handler (fn [t state] [state])))
+  ([input init-state value-handler notify-handler]
+   (let [out (make-edge (protocols/get-worker input))]
+     (async/go-loop [state init-state
+                     ct nil]
+       (if-let [[t value :as msg] (async/<! input)]
+         (do
+           #_(locking *out* (println state "<!" msg))
+           (if (is-value? msg)
+             (recur (value-handler state t value) t)
+             (when (and (not (nil? ct)) (not= t ct))
+               (doseq [value (notify-handler ct state)]
+                 (async/>! out [ct value]))
+               (async/>! out [t]))))
+         (do
+           (when ct
+             (doseq [value (notify-handler state ct)]
+               (async/>! out [ct value])))
+           (async/close! out))))
+     out)))
 
 (defn input-variable
   [id worker]
@@ -296,6 +351,7 @@
                                     item)))))))
 
 (defn pipeline-progress!
+  "Creates a vertex that processes input and time markers using transducer xf."
   [input xf]
   (make-edge input xf))
 
@@ -309,35 +365,26 @@
         x))
 
 (defn pipeline!
+  "Creates a vertex that processes each input using transducer xf. It receives in a streaming fashion.
+
+  Each worker will run the entire tranducer."
   [input xf]
   (let [[start end] (capture)]
     (pipeline-progress! input (for-each is-value? (comp start (map second) xf end)))))
 
 (defn segmented-pipeline!
+  "Creates a vertex that processes each input using item-f and notify-f.
+
+  item-f is invoked for every input received.
+  notify-f is invoked for every batch notification received.
+  "
   [input item-f notify-f]
   (let [[start end] (capture)]
-    (pipeline-progress! input (comp (for-notify notify-f) (for-each is-value? (comp start (map second) (map item-f) end)))))
-  #_
-  (let [out (async/chan)]
-    (async/go
-      (let [v (volatile! nil)
-            a (java.util.ArrayList.)]
-        (loop []
-          (let [[t item :as msg] (async/<! input)]
-            (if (or (nil? msg) (not= t @v))
-              (let [old-t @v]
-                (when-not (.isEmpty a)
-                  (async/into (mapv (fn [v] [old-t v]) (collection-f (vec a))) out)
-                  (.clear a))
-                (vreset! v t)
-                (when msg
-                  (.add a (item-f item))
-                  (recur)))
-              (do (.add a (item-f item))
-                  (recur))))))
-     out)))
+    (pipeline-progress! input (comp (for-notify notify-f) (for-each is-value? (comp start (map second) (map item-f) end))))))
 
 (defn exchange!
+  "Creates a vertex that routes inputs to different vertices based on a key-fn.
+  Identical values the key-fn returns routes to the same vertex."
   ([input step-id] (exchange! input step-id identity))
   ([input step-id key-fn]
    (let [out    (make-edge (protocols/get-worker input))
@@ -350,8 +397,14 @@
              (protocols/notify-worker worker ::carry step-id msg))
            (recur))
          #_(protocols/notify-worker ::close step-id nil)))
+     ;; our cleanup is implied by this subscribe
      (protocols/subscribe worker step-id out)
      out)))
+
+(defn sink!
+  "Creates an exchange! that routes all data to one worker."
+  [input step-id]
+  (exchange! input step-id (constantly 0)))
 
 (defn concat! [input other-input]
   (if (instance? LoopVariable other-input)
@@ -362,7 +415,6 @@
 (defn loop-variable
   ([worker] (loop-variable worker 1))
   ([worker amt]
-  ;; TODO: we never close loop-variables... what's the best way to do this?
    (let [v (->LoopVariable (async/chan 1 (map (fn [[t v]] [(update t (dec (count t)) + amt) v]))))]
      (protocols/register-cleanup worker #(async/close! v))
      v)))
@@ -371,12 +423,12 @@
   (let [out (make-edge (protocols/get-worker input))]
     (async/go-loop []
       (if-let [item (async/<! input)]
-        (let [[t value] item]
-          (do
+        (do
+          (let [[t value] item]
             (if (predicate (t (dec (count t))) value)
-              (async/put! loop-stream item)
-              (async/>! out item))
-            (recur)))
+              (async/>! loop-stream item)
+              (async/>! out item)))
+          (recur))
         (async/close! out)))
     out))
 
@@ -410,29 +462,6 @@
           left-input
           right-input))
     out))
-
-(defn vertex*
-  ([input value-handler] (vertex* input nil value-handler (fn [t state] [state])))
-  ([input init-state value-handler] (vertex* input init-state value-handler (fn [t state] [state])))
-  ([input init-state value-handler notify-handler]
-   (let [out (make-edge (protocols/get-worker input))]
-     (async/go-loop [state init-state
-                     ct nil]
-       (if-let [[t value :as msg] (async/<! input)]
-         (do
-           #_(locking *out* (println state "<!" msg))
-           (if (is-value? msg)
-             (recur (value-handler state t value) t)
-             (when (and (not (nil? ct)) (not= t ct))
-               (doseq [value (notify-handler ct state)]
-                 (async/>! out [ct value]))
-               (async/>! out [t]))))
-         (do
-           (when ct
-             (doseq [value (notify-handler state ct)]
-               (async/>! out [ct value])))
-           (async/close! out))))
-     out)))
 
 (defn count!
   ([input step-id] (count! input step-id identity))

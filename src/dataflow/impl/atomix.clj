@@ -8,6 +8,7 @@
            [io.atomix.cluster.discovery BootstrapDiscoveryProvider]
            [io.atomix.protocols.raft.partition RaftPartitionGroup]
            [io.atomix.storage StorageLevel]
+           io.atomix.utils.net.Address
            [java.util.concurrent Executors]
            [java.util.function Function Consumer]))
 
@@ -18,6 +19,11 @@
     (instance? MemberId id) id
     (instance? Node id) (.id ^Node id)
     :else (MemberId/from (str id))))
+
+(defn node-id [^Node n] (.id n))
+(defn node-address [^Node n]
+  (let [^Address addr (.address n)]
+    [(.host addr) (.port addr)]))
 
 (defn ^Node ->node [m-or-v]
   (cond

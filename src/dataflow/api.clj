@@ -27,9 +27,14 @@
      - [[join!]]
    "
   [{:as   opts
-    :keys [type n]}
+    :keys [type
+           n
+           nodes index]}
    make-dataflow]
-  (impl/run-threads opts make-dataflow))
+  (case type
+    :threads (impl/run-threads opts make-dataflow)
+    :cluster (impl/run-cluster (merge opts {:nodes nodes :index index})
+                               make-dataflow)))
 
 (def ^{:doc      "pipeline! processes the input channel using the transducer xf.
                   Results of xf are produced in the returned channel as values. xf receives the
