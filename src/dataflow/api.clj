@@ -1,5 +1,6 @@
 (ns dataflow.api
-  (:require [dataflow.impl.core :as impl]))
+  (:require [dataflow.impl.core :as impl]
+            [dataflow.impl.protocols :as protocols]))
 
 (def input-variable impl/input-variable)
 
@@ -25,6 +26,8 @@
      - [[segmented-pipeline!]]
      - [[exchange!]]
      - [[join!]]
+     - [[reduce!]]
+     - [[count!]]
    "
   [{:as   opts
     :keys [type
@@ -71,7 +74,14 @@
 (def join! impl/join!)
 (def ^{:doc "concat! merges into an input stream"}
   concat! impl/concat!)
+(def count! impl/count!)
+(def reduce! impl/reduce!)
 (def loop-variable impl/loop-variable)
 (def loop-when! impl/loop-when!)
 
 (def wait-for impl/wait-for)
+
+(def advance! protocols/send!)
+(def send! protocols/send!)
+(def send-and-advance! protocols/send-and-advance!)
+(def send-batch! protocols/send-batch!)
