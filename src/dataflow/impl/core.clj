@@ -268,6 +268,7 @@
                   (protocols/close w)))
      :workers workers}))
 
+(declare is-value?)
 (defn vertex*
   ([input value-handler] (vertex* input nil value-handler (fn [t state] [state])))
   ([input init-state value-handler] (vertex* input init-state value-handler (fn [t state] [state])))
