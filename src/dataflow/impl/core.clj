@@ -296,6 +296,10 @@
   [id worker]
   (->InputVariable (input-ch worker) id worker (atom 0)))
 
+(defn output-variable
+  [id worker]
+  (->OutputVariable (output-ch worker) ))
+
 (defn trace [f]
   (map (fn [item] (f item) item)))
 
@@ -485,7 +489,6 @@
     printer))
 
 (comment
-
   (do ;; threaded cluster - technically more thread than workers since core-async is backed by a threadpool
     (def sig (async/chan (async/sliding-buffer 1)))
     (def printer (print-ch (using-lock *out* prn)))

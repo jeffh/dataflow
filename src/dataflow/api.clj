@@ -8,7 +8,7 @@
   "Starts execution of a dataflow computation graph with a given set of options for a worker.
 
    Parameters:
-    - type = :threads | :sockets (defaults to :threads)
+    - type = :threads | :cluster (defaults to :threads)
       Workers are expected to all run in the same process in different threads. Uses a core.async thread pool.
     - n = Integer | :cpus (defaults to 1)
       The number of expected concurrent workers to run. If :cpus is given, defaults to the number of available CPUs.

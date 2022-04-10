@@ -14,7 +14,9 @@
 
 (set! *warn-on-reflection* true)
 
-(defn ^MemberId ->member-id [id]
+(defn ^MemberId ->member-id
+  "Generates a atomix MemberId type from a string or node."
+  [id]
   (cond
     (instance? MemberId id) id
     (instance? Node id) (.id ^Node id)
@@ -25,7 +27,7 @@
   (let [^Address addr (.address n)]
     [(.host addr) (.port addr)]))
 
-(defn ^Node ->node [m-or-v]
+(defn ->node ^Node [m-or-v]
   (cond
     (instance? Node m-or-v) m-or-v
     (map? m-or-v)
@@ -70,10 +72,12 @@
 (defn ^Profile profile-grid
   ([] (Profile/dataGrid))
   ([num-partitions] (Profile/dataGrid (int num-partitions))))
-(defn ^Profile profile-client [] (Profile/client))
+(defn profile-client ^Profile [] (Profile/client))
 
-(defn ^Atomix cluster [{:keys [cluster-id member-id membership-provider host port
-                               multicast? management-group partition-groups profiles properties zone rack]}]
+(defn cluster
+  ^Atomix
+  [{:keys [cluster-id member-id membership-provider host port
+           multicast? management-group partition-groups profiles properties zone rack]}]
   (.build
    (cond-> (Atomix/builder)
      cluster-id (.withClusterId (str cluster-id))
